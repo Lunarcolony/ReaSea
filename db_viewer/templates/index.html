@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Research Papers Feed</title>
+    <!-- Use Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <!-- Link to custom css -->
+    <link rel="stylesheet" href="{{ url_for('static', filename='index.css') }}">
+    <!-- Phosphor Icons for modern icons -->
+    <script src="https://unpkg.com/@phosphor-icons/web"></script>
+</head>
+<body>
+    <header class="app-header">
+        <div class="header-container">
+            <div class="logo">
+                <i class="ph-fill ph-book-open-text"></i>
+                <h1>Research Feed</h1>
+            </div>
+            <div class="search-bar">
+                <i class="ph ph-magnifying-glass"></i>
+                <input type="text" id="searchInput" placeholder="Search papers, authors, topics...">
+            </div>
+        </div>
+    </header>
+
+    <main class="feed-container">
+        <div class="feed-stats">
+            <p id="resultsCount">Loading...</p>
+        </div>
+        
+        <div id="papersFeed" class="papers-grid">
+            <!-- Paper cards will be injected here via JS -->
+        </div>
+
+        <div class="pagination" id="paginationControls">
+            <!-- Pagination buttons -->
+        </div>
+    </main>
+
+    <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>

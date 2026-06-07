@@ -1,0 +1,55 @@
+{
+  "crawlers": {
+    "OpenAlexCrawler": {
+      "enabled": true,
+      "batch_size": 10
+    },
+    "SemanticScholarCrawler": {
+      "enabled": true,
+      "batch_size": 5
+    }
+  },
+  "topics": [
+    {
+      "name": "Artificial Intelligence",
+      "queries": {
+        "default": "artificial intelligence"
+      },
+      "max_papers_per_run": 100
+    },
+    {
+      "name": "Machine Learning",
+      "queries": {
+        "default": "machine learning"
+      },
+      "max_papers_per_run": 100
+    },
+    {
+      "name": "Deep Learning",
+      "queries": {
+        "default": "deep learning"
+      },
+      "max_papers_per_run": 100
+    },
+    {
+      "name": "Bioinformatics",
+      "queries": {
+        "default": "bioinformatics"
+      },
+      "max_papers_per_run": 100
+    },
+    {
+      "name": "Computer Vision",
+      "queries": {
+        "default": "computer vision"
+      },
+      "max_papers_per_run": 100
+    }
+  ],
+  "global_settings": {
+    "delay_seconds": 1.0,
+    "max_retries": 3,
+    "retry_backoff_factor": 2.0,
+    "resume": true
+  }
+}

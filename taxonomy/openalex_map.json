@@ -1,0 +1,42 @@
+{
+  "artificial-intelligence": {
+    "label": "Artificial Intelligence",
+    "keywords": ["artificial intelligence", "ai", "intelligent systems"],
+    "openalex_concepts": ["C154945302", "C41008148"]
+  },
+  "machine-learning": {
+    "label": "Machine Learning",
+    "keywords": ["machine learning", "supervised learning", "unsupervised learning"],
+    "openalex_concepts": ["C119857082"]
+  },
+  "deep-learning": {
+    "label": "Deep Learning",
+    "keywords": ["deep learning", "neural network", "deep neural"],
+    "openalex_concepts": ["C154945302", "C50644808"]
+  },
+  "computer-vision": {
+    "label": "Computer Vision",
+    "keywords": ["computer vision", "image recognition", "object detection"],
+    "openalex_concepts": ["C41008148", "C31972630"]
+  },
+  "bioinformatics": {
+    "label": "Bioinformatics",
+    "keywords": ["bioinformatics", "genomics", "proteomics"],
+    "openalex_concepts": ["C192562407", "C86803240"]
+  },
+  "natural-language-processing": {
+    "label": "Natural Language Processing",
+    "keywords": ["natural language", "nlp", "language model", "text mining"],
+    "openalex_concepts": ["C185592680", "C2522767166"]
+  },
+  "robotics": {
+    "label": "Robotics",
+    "keywords": ["robotics", "robot", "autonomous agent"],
+    "openalex_concepts": ["C57209506"]
+  },
+  "general-research": {
+    "label": "General Research",
+    "keywords": [],
+    "openalex_concepts": []
+  }
+}

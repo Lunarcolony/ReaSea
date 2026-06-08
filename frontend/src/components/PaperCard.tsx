@@ -8,7 +8,7 @@ interface PaperCardProps {
   paper: Paper;
   onSave?: (id: number) => void;
   onClick?: (id: number) => void;
-  variant?: "feed" | "grid";
+  variant?: "feed" | "grid" | "youtube";
 }
 
 export function PaperCard({ paper, onSave, onClick, variant = "feed" }: PaperCardProps) {
@@ -17,6 +17,14 @@ export function PaperCard({ paper, onSave, onClick, variant = "feed" }: PaperCar
 
   return (
     <article className={`paper-card paper-card--${variant}`}>
+      {variant === "youtube" && (
+        <div className="paper-card__thumb" aria-hidden>
+          <span className="paper-card__thumb-topic">{paper.primary_topic || "Research"}</span>
+          {(paper.is_open_access || paper.pdf_url) && (
+            <span className="paper-card__free-badge">Free PDF</span>
+          )}
+        </div>
+      )}
       <Link
         href={`/papers/${paper.id}`}
         className="paper-card__link"
@@ -26,6 +34,9 @@ export function PaperCard({ paper, onSave, onClick, variant = "feed" }: PaperCar
           <span className="source-badge">{paper.source_api}</span>
           {paper.citation_count > 0 && (
             <span className="citation-badge">{formatCitations(paper.citation_count)}</span>
+          )}
+          {(paper.is_open_access || paper.pdf_url) && variant !== "youtube" && (
+            <span className="free-badge">Free</span>
           )}
         </div>
         <h3 className="paper-card__title">{paper.title}</h3>

@@ -12,10 +12,21 @@ router = APIRouter()
 @router.get("")
 def get_feed(
     refresh: bool = False,
+    exclude: str = "",
     user: User = Depends(get_default_user),
     db: Session = Depends(get_db),
 ):
-    return build_feed(db, user_id=user.id, refresh=refresh)
+    client_seen_ids = set()
+    for part in exclude.split(","):
+        part = part.strip()
+        if part.isdigit():
+            client_seen_ids.add(int(part))
+    return build_feed(
+        db,
+        user_id=user.id,
+        refresh=refresh,
+        client_seen_ids=client_seen_ids,
+    )
 
 
 @router.get("/rows/{row_id}")

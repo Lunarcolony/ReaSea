@@ -5,8 +5,12 @@
       "batch_size": 10
     },
     "SemanticScholarCrawler": {
+      "enabled": false,
+      "batch_size": 8
+    },
+    "ArxivCrawler": {
       "enabled": true,
-      "batch_size": 5
+      "batch_size": 10
     }
   },
   "topics": [
@@ -47,7 +51,8 @@
     }
   ],
   "global_settings": {
-    "delay_seconds": 1.0,
+    "delay_seconds": 3.0,
+    "min_citations": 5,
     "max_retries": 3,
     "retry_backoff_factor": 2.0,
     "resume": true

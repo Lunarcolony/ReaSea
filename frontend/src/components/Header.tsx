@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { CatalogStats } from "@/components/CatalogStats";
 
 const NAV = [
   { href: "/", label: "Home" },
@@ -20,7 +21,10 @@ export function Header() {
           <span className="logo__icon" aria-hidden>
             ◆
           </span>
-          Research Feed
+          <span className="logo__text">
+            Research Feed
+            <CatalogStats />
+          </span>
         </Link>
         <nav className="header-nav">
           {NAV.map(({ href, label }) => (

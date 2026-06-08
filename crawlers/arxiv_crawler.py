@@ -1,13 +1,16 @@
 import requests
+
 from .base import BaseCrawler
 from .openalex_common import openalex_work_to_paper
 
 
-class OpenAlexCrawler(BaseCrawler):
+class ArxivCrawler(BaseCrawler):
+    """Fetch cited arXiv preprints via OpenAlex (min citations, free full text)."""
+
     def __init__(
         self,
         limit: int = 10,
-        query: str = "artificial intelligence",
+        query: str = "machine learning",
         offset: int = 0,
         ingestion_topic: str = "",
         min_citations: int = 5,
@@ -21,7 +24,7 @@ class OpenAlexCrawler(BaseCrawler):
         filter_str = (
             f"cited_by_count:>{min_c - 1},is_paratext:false,open_access.is_oa:true"
         )
-        fetch_limit = min(self.limit * 4, 100)
+        fetch_limit = min(self.limit * 5, 100)
 
         params = {
             "search": self.query,
@@ -38,16 +41,16 @@ class OpenAlexCrawler(BaseCrawler):
         for work in response.json().get("results", []):
             paper = openalex_work_to_paper(
                 work,
-                source_api="OpenAlex",
+                source_api="arXiv",
                 min_citations=self.min_citations,
-                require_arxiv=False,
+                require_arxiv=True,
             )
             if paper:
                 raw_papers.append(paper)
 
         sorted_papers = sorted(
             raw_papers,
-            key=lambda x: (x.get("citation_count", 0), x.get("hybrid_score", 0)),
+            key=lambda x: x.get("citation_count", 0),
             reverse=True,
         )
         return self._finalize(sorted_papers[: self.limit])

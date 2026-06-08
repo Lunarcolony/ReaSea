@@ -2,26 +2,30 @@ import json
 import logging
 import time
 import random
+import os
 from datetime import datetime
 
 from sqlalchemy.exc import IntegrityError
 
 from database import init_db, SessionLocal
-from models import Paper, CrawlerState
+from models import Paper
 from utils.helpers import paper_fields_for_db, slugify_topic
+from utils.crawl_helpers import get_min_citations, paper_already_in_db
 
 from crawlers.openalex_crawler import OpenAlexCrawler
-from crawlers.semantic_scholar_crawler import SemanticScholarCrawler
+from crawlers.arxiv_crawler import ArxivCrawler
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 CRAWLER_CLASSES = {
     "OpenAlexCrawler": OpenAlexCrawler,
-    "SemanticScholarCrawler": SemanticScholarCrawler,
+    "ArxivCrawler": ArxivCrawler,
 }
 
 fetched_offset_zero = set()
+MAX_EMPTY_BATCHES = 25
+OFFSETS_FILE = "crawler_offsets.json"
 
 
 def load_config():
@@ -32,11 +36,49 @@ def load_config():
         return {
             "crawlers": {
                 "OpenAlexCrawler": {"enabled": True, "batch_size": 10},
-                "SemanticScholarCrawler": {"enabled": True, "batch_size": 5},
+                "ArxivCrawler": {"enabled": True, "batch_size": 10},
             },
             "topics": [{"name": "Machine Learning", "queries": {"default": "machine learning"}}],
-            "global_settings": {"delay_seconds": 2.0, "max_retries": 3, "retry_backoff_factor": 2.0, "resume": True},
+            "global_settings": {
+                "delay_seconds": 3.0,
+                "max_retries": 3,
+                "retry_backoff_factor": 2.0,
+                "resume": True,
+                "min_citations": 5,
+            },
         }
+
+
+def load_offsets():
+    if not os.path.exists(OFFSETS_FILE):
+        return {}
+    try:
+        with open(OFFSETS_FILE, "r") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def save_offsets(offsets_dict):
+    try:
+        with open(OFFSETS_FILE, "w") as f:
+            json.dump(offsets_dict, f, indent=2)
+    except Exception as e:
+        logger.error("Failed to save offsets to file: %s", e)
+
+
+def _advance_offset(resume, offset, step, is_offset_zero_run, combo_key, offsets_dict):
+    if is_offset_zero_run:
+        fetched_offset_zero.add(combo_key)
+    if not resume:
+        return offset
+    new_offset = offset + step
+    
+    key_str = f"{combo_key[0]}|{combo_key[1]}|{combo_key[2]}"
+    offsets_dict[key_str] = new_offset
+    save_offsets(offsets_dict)
+    
+    return new_offset
 
 
 def run_crawl_cycle(target_total_papers: int = 50) -> int:
@@ -44,13 +86,17 @@ def run_crawl_cycle(target_total_papers: int = 50) -> int:
     init_db()
     config = load_config()
     global_settings = config.get("global_settings", {})
-    delay_seconds = global_settings.get("delay_seconds", 2.0)
+    delay_seconds = global_settings.get("delay_seconds", 3.0)
     max_retries = global_settings.get("max_retries", 3)
     retry_backoff_factor = global_settings.get("retry_backoff_factor", 2.0)
     resume = global_settings.get("resume", True)
+    min_citations = get_min_citations(config)
 
     db = SessionLocal()
     total_added = 0
+    empty_batches = 0
+    
+    offsets_dict = load_offsets()
 
     try:
         enabled_crawlers = [n for n, cfg in config.get("crawlers", {}).items() if cfg.get("enabled", True)]
@@ -60,9 +106,20 @@ def run_crawl_cycle(target_total_papers: int = 50) -> int:
             return 0
 
         papers_gathered = 0
-        logger.info("--- Starting crawl cycle (target: %s papers) ---", target_total_papers)
+        logger.info(
+            "--- Starting crawl cycle (target: %s papers, min citations: %s) ---",
+            target_total_papers,
+            min_citations,
+        )
 
         while papers_gathered < target_total_papers:
+            if empty_batches >= MAX_EMPTY_BATCHES:
+                logger.warning(
+                    "Stopping early: %s consecutive batches added nothing (catalog likely caught up).",
+                    empty_batches,
+                )
+                break
+
             selected_topic = random.choice(topics_list)
             selected_crawler_name = random.choice(enabled_crawlers)
             topic_name = selected_topic.get("name")
@@ -79,17 +136,11 @@ def run_crawl_cycle(target_total_papers: int = 50) -> int:
             batch_size = crawler_cfg.get("batch_size", 10)
             current_limit = min(batch_size, target_total_papers - papers_gathered)
 
-            state_record = None
-            if resume:
-                state_record = db.query(CrawlerState).filter(
-                    CrawlerState.crawler_name == selected_crawler_name,
-                    CrawlerState.topic_name == topic_name,
-                    CrawlerState.query == query,
-                ).first()
-
             combo_key = (selected_crawler_name, topic_name, query)
+            key_str = f"{combo_key[0]}|{combo_key[1]}|{combo_key[2]}"
+            
             if combo_key in fetched_offset_zero:
-                offset = state_record.last_offset if state_record else 0
+                offset = offsets_dict.get(key_str, 0) if resume else 0
                 is_offset_zero_run = False
             else:
                 offset = 0
@@ -101,8 +152,11 @@ def run_crawl_cycle(target_total_papers: int = 50) -> int:
             )
 
             crawler = crawler_class(
-                limit=current_limit, query=query, offset=offset,
+                limit=current_limit,
+                query=query,
+                offset=offset,
                 ingestion_topic=slugify_topic(topic_name),
+                min_citations=min_citations,
             )
 
             papers_data = []
@@ -125,22 +179,37 @@ def run_crawl_cycle(target_total_papers: int = 50) -> int:
                         break
 
             if not success:
+                empty_batches += 1
                 continue
 
+            # Force exact limit matching to keep pages aligned nicely
+            offset_step = max(current_limit, batch_size)
+
             if not papers_data:
-                if is_offset_zero_run:
-                    fetched_offset_zero.add(combo_key)
-                elif resume and state_record:
-                    state_record.last_offset = 0
-                    db.commit()
+                logger.info(
+                    "-> No new quality papers at this offset for '%s' (min %s citations). Advancing offset.",
+                    topic_name,
+                    min_citations,
+                )
+                _advance_offset(
+                    resume, offset, offset_step, is_offset_zero_run, combo_key, offsets_dict
+                )
+                empty_batches += 1
+                time.sleep(delay_seconds)
                 continue
 
             added_in_batch = 0
+            duplicate_count = 0
             for p_data in papers_data:
                 if not p_data.get("external_id"):
                     continue
                 if not p_data.get("primary_topic") and p_data.get("ingestion_topic"):
                     p_data["primary_topic"] = p_data["ingestion_topic"]
+
+                dup_reason = paper_already_in_db(db, p_data)
+                if dup_reason:
+                    duplicate_count += 1
+                    continue
 
                 fields = paper_fields_for_db(p_data)
                 paper = Paper(**fields)
@@ -151,35 +220,26 @@ def run_crawl_cycle(target_total_papers: int = 50) -> int:
                     total_added += 1
                 except IntegrityError:
                     db.rollback()
+                    duplicate_count += 1
 
-            logger.info("-> Added %s/%s papers from '%s'.", added_in_batch, len(papers_data), topic_name)
+            if added_in_batch == 0:
+                empty_batches += 1
+            else:
+                empty_batches = 0
+
+            logger.info(
+                "-> Added %s/%s from '%s' (%s already in catalog, min citations %s).",
+                added_in_batch,
+                len(papers_data),
+                topic_name,
+                duplicate_count,
+                min_citations,
+            )
             papers_gathered += added_in_batch
 
-            if is_offset_zero_run:
-                fetched_offset_zero.add(combo_key)
-                if resume and not state_record:
-                    state_record = CrawlerState(
-                        crawler_name=selected_crawler_name,
-                        topic_name=topic_name,
-                        query=query,
-                        last_offset=len(papers_data),
-                    )
-                    db.add(state_record)
-                    db.commit()
-            else:
-                new_offset = offset + len(papers_data)
-                if resume:
-                    if not state_record:
-                        state_record = CrawlerState(
-                            crawler_name=selected_crawler_name,
-                            topic_name=topic_name,
-                            query=query,
-                            last_offset=new_offset,
-                        )
-                        db.add(state_record)
-                    else:
-                        state_record.last_offset = new_offset
-                    db.commit()
+            _advance_offset(
+                resume, offset, offset_step, is_offset_zero_run, combo_key, offsets_dict
+            )
 
             time.sleep(delay_seconds)
 

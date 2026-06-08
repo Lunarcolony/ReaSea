@@ -17,6 +17,7 @@ export interface Paper {
   hybrid_impact?: number;
   saved?: boolean;
   similar?: Paper[];
+  is_open_access?: boolean;
 }
 
 export interface FeedRow {
@@ -30,6 +31,11 @@ export interface FeedResponse {
   seed?: number;
   personalized?: boolean;
   refreshed?: boolean;
+  shown_ids?: number[];
+}
+
+export interface StatsResponse {
+  total_papers: number;
 }
 
 async function apiFetch(path: string, options: RequestInit = {}) {
@@ -47,7 +53,14 @@ async function apiFetch(path: string, options: RequestInit = {}) {
 }
 
 export const api = {
-  getFeed: (refresh = false) => apiFetch(`/feed${refresh ? "?refresh=true" : ""}`),
+  getStats: (): Promise<StatsResponse> => apiFetch("/stats"),
+  getFeed: (refresh = false, excludeIds: number[] = []) => {
+    const params = new URLSearchParams();
+    if (refresh) params.set("refresh", "true");
+    if (excludeIds.length) params.set("exclude", excludeIds.join(","));
+    const query = params.toString();
+    return apiFetch(`/feed${query ? `?${query}` : ""}`);
+  },
   getPaper: (id: number) => apiFetch(`/papers/${id}`),
   search: (q: string, page = 1) => apiFetch(`/search?q=${encodeURIComponent(q)}&page=${page}`),
   getPreferences: () => apiFetch("/users/me/preferences"),

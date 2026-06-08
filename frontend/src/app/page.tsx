@@ -2,9 +2,13 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { api, FeedRow } from "@/lib/api";
+import { getSeenPaperIds, recordShownPaperIds, clearSeenPaperIds } from "@/lib/seenPapers";
 import { FeedRowSection } from "@/components/FeedRow";
+import { FeedYouTubeView } from "@/components/FeedYouTubeView";
+import { FeedControls } from "@/components/FeedControls";
 import { HeroBanner } from "@/components/HeroBanner";
 import { FeedSkeleton } from "@/components/FeedSkeleton";
+import { FeedViewId, ThemeId, getFeedView, getTheme } from "@/lib/preferences";
 
 export default function HomePage() {
   const [rows, setRows] = useState<FeedRow[]>([]);
@@ -12,15 +16,27 @@ export default function HomePage() {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
   const [personalized, setPersonalized] = useState(false);
+  const [theme, setThemeState] = useState<ThemeId>("dark");
+  const [view, setViewState] = useState<FeedViewId>("carousel");
+
+  useEffect(() => {
+    setThemeState(getTheme());
+    setViewState(getFeedView());
+  }, []);
 
   const loadFeed = useCallback(async (refresh = false) => {
     if (refresh) setRefreshing(true);
     else setLoading(true);
     setError("");
     try {
-      const data = await api.getFeed(refresh);
+      const seenIds = getSeenPaperIds();
+      const data = await api.getFeed(refresh, seenIds);
       setRows(data.rows || []);
       setPersonalized(Boolean(data.personalized));
+      const shown =
+        data.shown_ids ||
+        (data.rows || []).flatMap((row: FeedRow) => row.papers.map((p) => p.id));
+      recordShownPaperIds(shown);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load feed");
     } finally {
@@ -49,6 +65,10 @@ export default function HomePage() {
     );
   }, []);
 
+  const handlePaperClick = useCallback((id: number) => {
+    api.recordEvent(id, "click").catch(() => {});
+  }, []);
+
   const handleRefresh = () => loadFeed(true);
 
   if (loading) return <FeedSkeleton />;
@@ -64,13 +84,30 @@ export default function HomePage() {
       </div>
     );
 
-  if (!rows.length)
+  if (!rows.length) {
+    const seenCount = getSeenPaperIds().length;
     return (
       <div className="empty-state">
-        <h2>No papers yet</h2>
-        <p>Run the crawler to populate your research catalog.</p>
+        <h2>You're all caught up!</h2>
+        <p>
+          You've explored all the fresh papers currently in your catalog (you've seen {seenCount} papers).
+        </p>
+        <p>Leave the crawler running to find more, or clear your history to explore the existing ones again.</p>
+        <div style={{ marginTop: "1rem" }}>
+          <button
+            type="button"
+            className="btn secondary"
+            onClick={() => {
+              clearSeenPaperIds();
+              window.location.reload();
+            }}
+          >
+            Clear read history & start over
+          </button>
+        </div>
       </div>
     );
+  }
 
   return (
     <div className="home">
@@ -80,22 +117,32 @@ export default function HomePage() {
           <p className="feed-toolbar__subtitle">
             {personalized
               ? "Personalized from your topics and reading activity"
-              : "Explore papers — click any card to teach the feed your interests"}
+              : "Explore open-access papers — click any card to teach the feed your interests"}
           </p>
         </div>
-        <button
-          type="button"
-          className="btn secondary feed-refresh-btn"
-          onClick={handleRefresh}
-          disabled={refreshing}
-        >
-          {refreshing ? "Refreshing…" : "Refresh feed"}
-        </button>
+        <div className="feed-toolbar__actions">
+          <FeedControls
+            theme={theme}
+            view={view}
+            onThemeChange={setThemeState}
+            onViewChange={setViewState}
+          />
+          <button
+            type="button"
+            className="btn secondary feed-refresh-btn"
+            onClick={handleRefresh}
+            disabled={refreshing}
+          >
+            {refreshing ? "Refreshing…" : "Refresh feed"}
+          </button>
+        </div>
       </div>
-      {heroPaper && <HeroBanner paper={heroPaper} />}
-      {rows.map((row) => (
-        <FeedRowSection key={row.id} row={row} onSave={handleSave} />
-      ))}
+      {view === "carousel" && heroPaper && <HeroBanner paper={heroPaper} />}
+      {view === "carousel" ? (
+        rows.map((row) => <FeedRowSection key={row.id} row={row} onSave={handleSave} />)
+      ) : (
+        <FeedYouTubeView rows={rows} onSave={handleSave} onPaperClick={handlePaperClick} />
+      )}
     </div>
   );
 }

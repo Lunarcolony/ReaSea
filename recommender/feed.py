@@ -4,6 +4,7 @@ import hashlib
 import json
 import logging
 import os
+import random
 import re
 import time
 from collections import defaultdict
@@ -19,8 +20,8 @@ from embeddings.pipeline import get_paper_embedding, cosine_similarity
 
 logger = logging.getLogger(__name__)
 
-ROW_LIMIT = 20
-POOL_MULTIPLIER = 6
+ROW_LIMIT = 24
+POOL_MULTIPLIER = 8
 SESSION_ROW_ID = "__feed_session__"
 EVENT_WEIGHTS = {"click": 3.0, "view": 1.0, "save": 5.0, "dismiss": -4.0}
 STOP_WORDS = {
@@ -35,6 +36,7 @@ class FeedContext:
     user_id: Optional[int]
     seed: int
     exclude_ids: Set[int] = field(default_factory=set)
+    soft_exclude_ids: Set[int] = field(default_factory=set)
     interest_weights: Dict[str, float] = field(default_factory=dict)
     recent_papers: List[Paper] = field(default_factory=list)
     feed_shown: Set[int] = field(default_factory=set)
@@ -71,6 +73,8 @@ def paper_to_dict(paper: Paper, metrics: Optional[PaperMetrics] = None) -> dict:
         "venue": paper.venue,
         "trending_score": metrics.trending_score if metrics else 0,
         "hybrid_impact": metrics.hybrid_impact if metrics else 0,
+        "pdf_url": paper.pdf_url,
+        "is_open_access": bool(getattr(paper, "is_open_access", False) or paper.pdf_url or paper.arxiv_id),
     }
 
 
@@ -81,9 +85,9 @@ def get_metrics_map(db: Session, paper_ids: List[int]) -> Dict[int, PaperMetrics
     return {m.paper_id: m for m in rows}
 
 
-def variety_jitter(paper_id: int, seed: int) -> float:
+def variety_jitter(paper_id: int, seed: int, amplitude: float = 0.2) -> float:
     raw = hashlib.md5(f"{paper_id}:{seed}".encode()).hexdigest()
-    return (int(raw[:8], 16) / 0xFFFFFFFF) * 0.2
+    return (int(raw[:8], 16) / 0xFFFFFFFF) * amplitude
 
 
 def tokenize(text: str) -> Set[str]:
@@ -210,31 +214,69 @@ def _save_feed_session(
     db.commit()
 
 
+def user_interacted_ids(db: Session, user_id: Optional[int]) -> Set[int]:
+    if not user_id:
+        return set()
+    events = db.query(UserEvent.paper_id).filter(
+        UserEvent.user_id == user_id,
+        UserEvent.event_type.in_(["click", "save", "dismiss"])
+    ).all()
+    saved = db.query(SavedPaper.paper_id).filter(SavedPaper.user_id == user_id).all()
+    return {r[0] for r in events} | {r[0] for r in saved}
+
 def make_feed_context(
-    db: Session, user_id: Optional[int], refresh: bool = False
+    db: Session,
+    user_id: Optional[int],
+    refresh: bool = False,
+    client_seen_ids: Optional[Set[int]] = None,
 ) -> FeedContext:
     session = _load_feed_session(db, user_id)
     interest_weights, recent_papers = user_interest_profile(db, user_id)
+    
+    interacted = user_interacted_ids(db, user_id)
+    client_seen = set(client_seen_ids or [])
+    last_shown = set(session.get("last_shown") or [])
+    prev_shown = set(session.get("prev_shown") or [])
+
+    soft_exclude = client_seen | last_shown | prev_shown
+    soft_exclude -= interacted
 
     if refresh:
         seed = int(time.time()) % 1_000_000_000
-        exclude = set(session.get("last_shown") or [])
     else:
         event_factor = len(recent_papers) % 97
+        client_factor = len(client_seen) % 53
         day_factor = datetime.utcnow().strftime("%Y%m%d")
         seed = int(
-            hashlib.md5(f"{user_id}:{day_factor}:{event_factor}".encode()).hexdigest()[:8],
+            hashlib.md5(
+                f"{user_id}:{day_factor}:{event_factor}:{client_factor}".encode()
+            ).hexdigest()[:8],
             16,
         )
-        exclude = set()
 
     return FeedContext(
         user_id=user_id,
         seed=seed,
-        exclude_ids=exclude,
+        exclude_ids=interacted,
+        soft_exclude_ids=soft_exclude,
         interest_weights=interest_weights,
         recent_papers=recent_papers,
         refresh=refresh,
+    )
+
+
+def _ctx_for_row(ctx: FeedContext, row_id: str) -> FeedContext:
+    """Per-row seed so refresh reshuffles every carousel, not only the hero."""
+    row_seed = int(hashlib.md5(f"{ctx.seed}:{row_id}".encode()).hexdigest()[:8], 16)
+    return FeedContext(
+        user_id=ctx.user_id,
+        seed=row_seed,
+        exclude_ids=set(ctx.exclude_ids),
+        soft_exclude_ids=set(ctx.soft_exclude_ids),
+        interest_weights=ctx.interest_weights,
+        recent_papers=ctx.recent_papers,
+        feed_shown=ctx.feed_shown,
+        refresh=ctx.refresh,
     )
 
 
@@ -265,12 +307,21 @@ def score_paper(
             if rp_emb:
                 emb_sim = max(emb_sim, cosine_similarity(paper_emb, rp_emb))
 
+    open_access_boost = 0.12 if (getattr(paper, "is_open_access", False) or paper.pdf_url or paper.arxiv_id) else 0.0
+    
+    # On refresh, aggressively shuffle. Otherwise, gentle variety.
+    jitter_amp = 1.5 if ctx.refresh else 0.2
+    # Soft penalty (-0.4) pushes seen items down, but large refresh jitter (+1.5) can pull them back up
+    soft_penalty = -0.4 if paper.id in ctx.soft_exclude_ids else 0.0
+
     return (
         base
         + 0.35 * interest
         + 0.30 * affinity
         + 0.20 * emb_sim
-        + variety_jitter(paper.id, ctx.seed)
+        + open_access_boost
+        + soft_penalty
+        + variety_jitter(paper.id, ctx.seed, jitter_amp)
     )
 
 
@@ -292,16 +343,53 @@ def _fallback_by_citations(db: Session, limit: int, ctx: Optional[FeedContext] =
     )
 
 
+def _fetch_with_soft_fallback(query, fallback_query, ctx: FeedContext, limit_mult: int) -> List[Paper]:
+    hard_exclude = ctx.exclude_ids | ctx.feed_shown
+    fully_unseen = hard_exclude | ctx.soft_exclude_ids
+    
+    candidates = []
+    if fully_unseen:
+        candidates = query.filter(Paper.id.notin_(fully_unseen)).limit(limit_mult).all()
+        if not candidates and fallback_query is not None:
+            candidates = fallback_query.filter(Paper.id.notin_(fully_unseen)).limit(limit_mult).all()
+    else:
+        candidates = query.limit(limit_mult).all()
+        if not candidates and fallback_query is not None:
+            candidates = fallback_query.limit(limit_mult).all()
+            
+    if len(candidates) < limit_mult // 2:
+        if hard_exclude:
+            backup = query.filter(Paper.id.notin_(hard_exclude)).limit(limit_mult).all()
+            if not backup and fallback_query is not None:
+                backup = fallback_query.filter(Paper.id.notin_(hard_exclude)).limit(limit_mult).all()
+        else:
+            backup = query.limit(limit_mult).all()
+            if not backup and fallback_query is not None:
+                backup = fallback_query.limit(limit_mult).all()
+                
+        seen_ids = {p.id for p in candidates}
+        for p in backup:
+            if p.id not in seen_ids:
+                candidates.append(p)
+                if len(candidates) >= limit_mult:
+                    break
+                    
+    return candidates
+
+
 def _select_from_query(
     db: Session,
     query,
     ctx: FeedContext,
     limit: int,
     base_scorer,
+    max_per_topic: Optional[int] = None,
 ) -> List[Paper]:
-    pool = query.limit(limit * POOL_MULTIPLIER).all()
+    pool = _fetch_with_soft_fallback(query, None, ctx, limit * POOL_MULTIPLIER)
+
     if not pool:
         return []
+    
     metrics_map = get_metrics_map(db, [p.id for p in pool])
     scored: List[Tuple[Paper, float]] = []
 
@@ -309,28 +397,32 @@ def _select_from_query(
         metrics = metrics_map.get(paper.id)
         base = base_scorer(paper, metrics)
         score = score_paper(paper, metrics, ctx, base, db)
-        if paper.id in ctx.exclude_ids:
-            score -= 0.45
         scored.append((paper, score))
 
     scored.sort(key=lambda x: -x[1])
     offset = (ctx.seed % max(1, len(scored) - limit + 1)) if len(scored) > limit else 0
     rotated = scored[offset:] + scored[:offset]
-    return mmr_select(rotated, limit)
+    return mmr_select(rotated, limit, max_per_topic=max_per_topic)
 
 
-def mmr_select(candidates: List[Tuple[Paper, float]], limit: int, lambda_param: float = 0.72) -> List[Paper]:
+def mmr_select(
+    candidates: List[Tuple[Paper, float]],
+    limit: int,
+    lambda_param: float = 0.72,
+    max_per_topic: Optional[int] = None,
+) -> List[Paper]:
     selected: List[Paper] = []
     selected_embeddings: List[List[float]] = []
     remaining = list(candidates)
     topic_counts: Dict[str, int] = {}
+    topic_cap = max_per_topic if max_per_topic is not None else max(6, limit // 3)
 
     while remaining and len(selected) < limit:
         best_idx = 0
         best_score = -1.0
         for i, (paper, relevance) in enumerate(remaining):
             topic = paper.primary_topic or "unknown"
-            if topic_counts.get(topic, 0) >= 2:
+            if topic_counts.get(topic, 0) >= topic_cap:
                 continue
             emb = get_paper_embedding(paper)
             if selected_embeddings and emb:
@@ -341,8 +433,11 @@ def mmr_select(candidates: List[Tuple[Paper, float]], limit: int, lambda_param: 
             if score > best_score:
                 best_score = score
                 best_idx = i
-        if best_score <= -1.0:
-            break
+        if best_score <= -1.0 and remaining:
+            # Relax topic cap so rows still fill when catalog skews to one topic
+            paper, _ = remaining.pop(0)
+            selected.append(paper)
+            continue
         if not remaining:
             break
         paper, _ = remaining.pop(best_idx)
@@ -366,7 +461,7 @@ def trending_row(db: Session, limit: int = ROW_LIMIT, ctx: Optional[FeedContext]
     )
     papers = _select_from_query(
         db, query, ctx, limit,
-        lambda p, m: (m.trending_score / 10.0) if m else 0.0,
+        lambda p, m: min((m.trending_score / 10.0), 2.0) if m else 0.0,
     )
     return papers if papers else _fallback_by_citations(db, limit, ctx)
 
@@ -381,7 +476,7 @@ def high_impact_row(db: Session, limit: int = ROW_LIMIT, ctx: Optional[FeedConte
     )
     papers = _select_from_query(
         db, query, ctx, limit,
-        lambda p, m: (m.hybrid_impact / 10.0) if m else 0.0,
+        lambda p, m: min((m.hybrid_impact / 10.0), 2.0) if m else 0.0,
     )
     return papers if papers else _fallback_by_citations(db, limit, ctx)
 
@@ -400,7 +495,8 @@ def topic_row(
     )
     papers = _select_from_query(
         db, query, ctx, limit,
-        lambda p, m: ((m.trending_score / 10.0) if m else 0.0) + 0.1,
+        lambda p, m: min(((m.trending_score / 10.0) if m else 0.0) + 0.1, 2.0),
+        max_per_topic=limit,
     )
     if papers:
         return papers
@@ -412,6 +508,7 @@ def topic_row(
     return _select_from_query(
         db, fallback_query, ctx, limit,
         lambda p, m: min(p.citation_count / 5000.0, 1.0),
+        max_per_topic=limit,
     )
 
 
@@ -454,13 +551,17 @@ def score_for_you(db: Session, user_id: Optional[int], paper: Paper, metrics: Op
                 if dp_emb and cosine_similarity(paper_emb, dp_emb) > 0.85:
                     return -1.0
 
+    jitter_amp = 1.5 if ctx.refresh else 0.2
+    soft_penalty = -0.4 if paper.id in ctx.soft_exclude_ids else 0.0
+
     return (
         0.30 * content_sim
         + 0.30 * topic_match
         + 0.25 * affinity
         + 0.10 * popularity
         + 0.05 * recency
-        + variety_jitter(paper.id, ctx.seed)
+        + soft_penalty
+        + variety_jitter(paper.id, ctx.seed, jitter_amp)
     )
 
 
@@ -481,18 +582,15 @@ def for_you_row(
         query = query.join(PaperTopic, Paper.id == PaperTopic.paper_id).filter(
             PaperTopic.topic_slug.in_(top_topics)
         )
-    candidates = query.limit(limit * POOL_MULTIPLIER * 2).all()
 
-    if not candidates:
-        candidates = db.query(Paper).outerjoin(PaperMetrics).limit(limit * POOL_MULTIPLIER * 2).all()
+    fallback_query = db.query(Paper).outerjoin(PaperMetrics)
+    candidates = _fetch_with_soft_fallback(query, fallback_query, ctx, limit * POOL_MULTIPLIER * 2)
 
     metrics_map = get_metrics_map(db, [p.id for p in candidates])
     scored: List[Tuple[Paper, float]] = []
 
     for paper in candidates:
         score = score_for_you(db, user_id, paper, metrics_map.get(paper.id), ctx)
-        if paper.id in ctx.exclude_ids:
-            score -= 0.45
         if score >= 0:
             scored.append((paper, score))
 
@@ -524,23 +622,17 @@ def because_you_read_row(
     if not source:
         return []
 
-    skip = ctx.exclude_ids | {source.id}
     source_emb = get_paper_embedding(source)
 
     if source_emb:
-        candidates = (
-            db.query(Paper)
-            .filter(Paper.id != source.id)
-            .limit(300)
-            .all()
-        )
+        candidates_query = db.query(Paper).filter(Paper.id != source.id)
+        candidates = _fetch_with_soft_fallback(candidates_query, None, ctx, 300)
+
         scored = []
         for paper in candidates:
             emb = get_paper_embedding(paper)
             if emb:
                 score = cosine_similarity(source_emb, emb) + variety_jitter(paper.id, ctx.seed)
-                if paper.id in skip:
-                    score -= 0.45
                 scored.append((paper, score))
         scored.sort(key=lambda x: -x[1])
         return [p for p, _ in scored[:limit]]
@@ -553,16 +645,25 @@ def ranked_topic_slugs(db: Session, user_id: Optional[int], ctx: FeedContext) ->
     prefs = user_topic_preferences(db, user_id)
     config_topics = load_topic_config()
     candidates = list(dict.fromkeys(prefs + list(ctx.interest_weights.keys()) + config_topics))
-    candidates.sort(key=lambda s: ctx.interest_weights.get(s, 0.0), reverse=True)
     if not candidates:
         return config_topics[:3]
+    if ctx.refresh:
+        rng = random.Random(ctx.seed)
+        rng.shuffle(candidates)
+    else:
+        candidates.sort(key=lambda s: ctx.interest_weights.get(s, 0.0), reverse=True)
     return candidates[:4]
 
 
 def build_feed(
-    db: Session, user_id: Optional[int] = None, refresh: bool = False
+    db: Session,
+    user_id: Optional[int] = None,
+    refresh: bool = False,
+    client_seen_ids: Optional[Set[int]] = None,
 ) -> dict:
-    ctx = make_feed_context(db, user_id, refresh=refresh)
+    ctx = make_feed_context(
+        db, user_id, refresh=refresh, client_seen_ids=client_seen_ids
+    )
     rows: List[dict] = []
     all_shown: List[int] = []
 
@@ -577,23 +678,24 @@ def build_feed(
         })
         for p in papers:
             all_shown.append(p.id)
+            ctx.feed_shown.add(p.id)
 
     if ctx.recent_papers and user_id:
-        because = because_you_read_row(db, user_id, ctx=ctx)
+        because = because_you_read_row(db, user_id, ctx=_ctx_for_row(ctx, "because_you_read"))
         if because:
             add_row("because_you_read", "Because You Read", because)
 
-    for_you = for_you_row(db, user_id, ctx=ctx)
+    for_you = for_you_row(db, user_id, ctx=_ctx_for_row(ctx, "for_you"))
     add_row("for_you", "Recommended for You", for_you)
 
-    trending = trending_row(db, ctx=ctx)
+    trending = trending_row(db, ctx=_ctx_for_row(ctx, "trending"))
     add_row("trending", "Trending Now", trending)
 
-    high_impact = high_impact_row(db, ctx=ctx)
+    high_impact = high_impact_row(db, ctx=_ctx_for_row(ctx, "high_impact"))
     add_row("high_impact", "High Impact", high_impact)
 
     for slug in ranked_topic_slugs(db, user_id, ctx):
-        papers = topic_row(db, slug, ctx=ctx)
+        papers = topic_row(db, slug, ctx=_ctx_for_row(ctx, f"topic_{slug}"))
         if papers:
             label = slug.replace("-", " ").title()
             add_row(f"topic_{slug}", label, papers)
@@ -606,6 +708,7 @@ def build_feed(
         "seed": ctx.seed,
         "personalized": bool(ctx.interest_weights or ctx.recent_papers),
         "refreshed": refresh,
+        "shown_ids": all_shown,
     }
 
 

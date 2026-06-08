@@ -5,12 +5,14 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy.orm import Session
 
 from api.routes import feed, papers, search, users
-from database import init_db, SessionLocal
+from database import init_db, SessionLocal, get_db
 from api.single_user import ensure_default_user
+from models import Paper
 
 app = FastAPI(title="Research Feed API", version="1.0.0")
 
@@ -43,3 +45,9 @@ def startup():
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+@app.get("/stats")
+def stats(db: Session = Depends(get_db)):
+    total_papers = db.query(Paper).count()
+    return {"total_papers": total_papers}

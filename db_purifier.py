@@ -148,22 +148,118 @@ def clean_abstract_html(db: Session) -> int:
     return count
 
 
+def remove_incomplete_papers(db: Session) -> int:
+    from utils.paper_access import is_freely_readable
+
+    papers = db.query(Paper).all()
+    count = 0
+    for p in papers:
+        title = (p.title or "").strip()
+        authors = (p.authors or "").strip()
+        abstract = (p.full_abstract or p.abstract_snippet or "").strip()
+        if len(title) < 8 or not authors or len(abstract) < 40:
+            db.delete(p)
+            count += 1
+            continue
+        if not is_freely_readable(
+            pdf_url=p.pdf_url,
+            arxiv_id=p.arxiv_id,
+            source_url=p.source_url,
+            is_open_access=getattr(p, "is_open_access", False),
+        ):
+            db.delete(p)
+            count += 1
+    if count:
+        db.commit()
+    return count
+
+
+def remove_duplicate_dois(db: Session) -> int:
+    dupes = (
+        db.query(Paper.doi)
+        .filter(Paper.doi.isnot(None), Paper.doi != "")
+        .group_by(Paper.doi)
+        .having(func.count(Paper.id) > 1)
+        .all()
+    )
+    count = 0
+    for (doi,) in dupes:
+        papers = db.query(Paper).filter(Paper.doi == doi).order_by(Paper.id).all()
+        for p in papers[1:]:
+            db.delete(p)
+            count += 1
+    if count:
+        db.commit()
+    return count
+
+
+def remove_not_freely_readable(db: Session) -> int:
+    from utils.paper_access import is_freely_readable
+
+    papers = db.query(Paper).all()
+    count = 0
+    for p in papers:
+        if not is_freely_readable(
+            pdf_url=p.pdf_url,
+            arxiv_id=p.arxiv_id,
+            source_url=p.source_url,
+            is_open_access=getattr(p, "is_open_access", False),
+        ):
+            db.delete(p)
+            count += 1
+    if count:
+        db.commit()
+    return count
+
+
+def backfill_pdf_urls(db: Session) -> int:
+    from utils.paper_access import arxiv_pdf_url, resolve_pdf_url
+
+    papers = db.query(Paper).filter(
+        (Paper.pdf_url.is_(None)) | (Paper.pdf_url == "")
+    ).all()
+    count = 0
+    for p in papers:
+        resolved = resolve_pdf_url(p.pdf_url, p.arxiv_id)
+        if resolved:
+            p.pdf_url = resolved
+            if p.arxiv_id or getattr(p, "is_open_access", False):
+                p.is_open_access = True
+            count += 1
+        elif p.arxiv_id and not p.pdf_url:
+            p.pdf_url = arxiv_pdf_url(p.arxiv_id)
+            p.is_open_access = True
+            count += 1
+    if count:
+        db.commit()
+    return count
+
+
 PURIFICATION_RULES = [
     ("Remove papers with missing titles", remove_missing_titles),
     ("Remove papers with placeholder titles", remove_placeholder_titles),
     ("Remove papers with very short titles", remove_very_short_titles),
     ("Remove papers with HTML in titles", remove_html_artifact_titles),
+    ("Backfill PDF URLs for arXiv/open access", backfill_pdf_urls),
+    ("Remove incomplete or paywalled papers", remove_incomplete_papers),
     ("Remove duplicate titles (keep oldest)", remove_duplicate_titles),
     ("Remove duplicate external IDs (keep oldest)", remove_duplicate_external_ids),
+    ("Remove duplicate DOIs (keep oldest)", remove_duplicate_dois),
     ("Remove papers with missing external IDs", remove_missing_external_ids),
     ("Remove papers with missing source API", remove_missing_source_api),
+    ("Remove papers without free full-text access", remove_not_freely_readable),
     ("Normalize whitespace in titles", clean_whitespace_in_titles),
     ("Strip HTML tags from abstracts", clean_abstract_html),
 ]
 
 
 def run_purifier(db: Session = None):
-    from database import SessionLocal
+    from database import SessionLocal, backup_sqlite_database
+
+    backup_path = backup_sqlite_database("pre_purify")
+    if backup_path:
+        logger.info("Safety backup before purify: %s", backup_path)
+
     own_session = db is None
     if own_session:
         db = SessionLocal()
@@ -193,4 +289,6 @@ def run_purifier(db: Session = None):
 
 
 if __name__ == "__main__":
+    from database import init_db
+    init_db()
     run_purifier()

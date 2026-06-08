@@ -1,5 +1,7 @@
 from abc import ABC, abstractmethod
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
+
+from utils.paper_access import paper_dict_is_complete, resolve_pdf_url
 
 # Standard paper dict keys returned by all crawlers
 PAPER_KEYS = {
@@ -10,7 +12,7 @@ PAPER_KEYS = {
 OPTIONAL_PAPER_KEYS = {
     "full_abstract", "doi", "pdf_url", "venue", "publication_type",
     "openalex_id", "arxiv_id", "pmid", "primary_topic", "concepts_json",
-    "fields_of_study", "ingestion_topic", "hybrid_score",
+    "fields_of_study", "ingestion_topic", "hybrid_score", "is_open_access",
 }
 
 
@@ -29,11 +31,19 @@ def normalize_paper(raw: Dict[str, Any]) -> Dict[str, Any]:
 
 
 class BaseCrawler(ABC):
-    def __init__(self, limit: int = 10, query: str = "", offset: int = 0, ingestion_topic: str = ""):
+    def __init__(
+        self,
+        limit: int = 10,
+        query: str = "",
+        offset: int = 0,
+        ingestion_topic: str = "",
+        min_citations: int = 5,
+    ):
         self.limit = limit
         self.query = query
         self.offset = offset
         self.ingestion_topic = ingestion_topic
+        self.min_citations = min_citations
 
     @abstractmethod
     def fetch_papers(self) -> List[Dict[str, Any]]:
@@ -44,6 +54,10 @@ class BaseCrawler(ABC):
         for p in papers:
             if self.ingestion_topic:
                 p["ingestion_topic"] = self.ingestion_topic
+            p["pdf_url"] = resolve_pdf_url(p.get("pdf_url"), p.get("arxiv_id"), p.get("open_access_url"))
+            p.pop("open_access_url", None)
             p.pop("hybrid_score", None)
+            if not paper_dict_is_complete(p):
+                continue
             result.append(normalize_paper(p))
         return result

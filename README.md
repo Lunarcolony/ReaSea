@@ -14,9 +14,20 @@ Crawlers (OpenAlex, Semantic Scholar)
 
 ## One-Click Launch (Windows)
 
-Double-click **`Start Research Feed.bat`** in the project folder. No terminal commands needed.
+You only need **two** shortcuts:
 
-### What it does
+| Action | Double-click |
+|--------|----------------|
+| **Website** (API + UI) | **`Start Website.bat`** |
+| **Crawlers** (background ingestion) | **`Start Crawlers.bat`** |
+
+To stop: **`Stop Website.bat`** or **`Stop Crawlers.bat`**.
+
+Older names (`Start Research Feed.bat`, `Start Crawler and Purifier.bat`) still work and open the same launchers.
+
+### Start Website
+
+Double-click **`Start Website.bat`** in the project folder.
 
 1. Creates the Python virtual environment and installs dependencies on first run (if missing)
 2. Runs `npm install` in `frontend/` on first run (if missing)
@@ -26,11 +37,25 @@ Double-click **`Start Research Feed.bat`** in the project folder. No terminal co
    - **Research Feed UI** — Next.js frontend at http://localhost:3000
 5. Waits for both services, then opens your browser to http://localhost:3000
 
-To shut down, close the two server windows or double-click **`Stop Research Feed.bat`**.
+### Start Crawlers (cooperative pipeline)
+
+Double-click **`Start Crawlers.bat`**. One window runs everything **in order** (no competing loops):
+
+1. **Crawl** new papers (OpenAlex + arXiv)
+2. **Backfill citations** for arXiv papers via OpenAlex
+3. **Enrich** topics and authors
+4. **Compute metrics** for recommendations
+5. **Purify** the database (after backfill, so papers are not deleted too early)
+6. **Refresh feed cache** (every 2nd cycle)
+7. **Generate embeddings** (every 3rd cycle)
+
+Then it sleeps ~5 minutes and repeats. On first start it also merges any stray database files into `data/papers.db`.
+
+Semantic Scholar is disabled; only reliable APIs (OpenAlex + arXiv) are used.
 
 ### Pin to desktop (optional)
 
-1. Right-click **`Start Research Feed.bat`**
+1. Right-click **`Start Website.bat`**
 2. Choose **Show more options → Send to → Desktop (create shortcut)**
 3. Rename the shortcut to **Research Feed** (optional)
 4. Double-click the desktop shortcut anytime to start the app
@@ -41,6 +66,22 @@ To shut down, close the two server windows or double-click **`Stop Research Feed
 powershell -ExecutionPolicy Bypass -File scripts/start-app.ps1
 powershell -ExecutionPolicy Bypass -File scripts/stop-app.ps1
 ```
+
+## Database (single SQLite file)
+
+All components (API, crawlers, purifier, db viewer) use **one canonical database**:
+
+`data/papers.db` (absolute path — never depends on your terminal folder)
+
+Your original `papers.db` in the project root is **preserved as a backup copy**. On first run, it is copied into `data/papers.db` if needed.
+
+If counts look wrong after an upgrade, run once:
+
+```bash
+python scripts/consolidate_databases.py
+```
+
+This merges any stray `.db` files into `data/papers.db` without deleting source files. The purifier also creates a timestamped backup under `data/backups/` before each run.
 
 ## Quick Start (Docker)
 
@@ -85,7 +126,7 @@ Runs on intervals: crawl (30m), purify (15m), enrich (20m), metrics (60m), embed
 
 | Variable | Description |
 |----------|-------------|
-| `DATABASE_URL` | PostgreSQL connection string (default: sqlite) |
+| `DATABASE_URL` | PostgreSQL connection string (default: absolute SQLite at `data/papers.db`) |
 | `SECRET_KEY` | JWT signing key |
 | `CORS_ORIGINS` | Allowed frontend origins |
 | `EMBEDDING_MODEL` | sentence-transformers model name |

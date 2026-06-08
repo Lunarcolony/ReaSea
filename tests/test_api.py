@@ -4,6 +4,15 @@ def test_health(client):
     assert r.json()["status"] == "ok"
 
 
+def test_stats(client):
+    r = client.get("/stats")
+    assert r.status_code == 200
+    data = r.json()
+    assert "total_papers" in data
+    assert isinstance(data["total_papers"], int)
+    assert data["total_papers"] >= 0
+
+
 def test_feed(client):
     r = client.get("/feed")
     assert r.status_code == 200

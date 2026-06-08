@@ -10,7 +10,7 @@ from database import init_db, SessionLocal
 from models import JobRun
 from main import run_crawl_cycle
 from db_purifier import run_purifier
-from enrichment.enrich_paper import enrich_batch
+from enrichment.enrich_paper import enrich_batch, backfill_citations_batch
 from classification.metrics import compute_metrics_batch
 from embeddings.pipeline import generate_embeddings_batch
 from recommender.feed import build_feed
@@ -64,9 +64,10 @@ def job_enrich():
     db = SessionLocal()
     run = log_job_start(db, "enrich")
     try:
-        count = enrich_batch(db, limit=100)
-        log_job_finish(db, run, "success", {"enriched": count})
-        logger.info("Enrichment job done: %s papers", count)
+        enriched = enrich_batch(db, limit=100)
+        citations = backfill_citations_batch(db, limit=50)
+        log_job_finish(db, run, "success", {"enriched": enriched, "citations_updated": citations})
+        logger.info("Enrichment job done: %s papers enriched, %s citations updated", enriched, citations)
     except Exception as e:
         log_job_finish(db, run, "failed", {"error": str(e)})
         logger.error("Enrich job failed: %s", e)

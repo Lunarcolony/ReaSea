@@ -51,6 +51,12 @@ class SemanticScholarCrawler(BaseCrawler):
             venue = venue_obj.get("name", "")
             pdf_obj = item.get("openAccessPdf", {}) or {}
             pdf_url = pdf_obj.get("url")
+            if arxiv_id and not pdf_url:
+                from utils.paper_access import arxiv_pdf_url
+                pdf_url = arxiv_pdf_url(arxiv_id)
+
+            if not pdf_url and not arxiv_id:
+                continue
 
             fields = item.get("fieldsOfStudy") or []
             relevance_score = item.get("relevanceScore", 1.0)
@@ -73,6 +79,7 @@ class SemanticScholarCrawler(BaseCrawler):
                 "pdf_url": pdf_url,
                 "venue": venue,
                 "fields_of_study": fields,
+                "is_open_access": True,
                 "hybrid_score": hybrid_score,
             })
 

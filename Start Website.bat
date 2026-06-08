@@ -1,5 +1,5 @@
 @echo off
-title Research Feed Launcher
+title Start Website
 cd /d "%~dp0"
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\start-app.ps1"
 echo.

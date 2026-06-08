@@ -135,6 +135,41 @@ def test_refresh_changes_seed(db):
     assert second["seed"] != first["seed"]
 
 
+def _feed_paper_ids(result):
+    return {
+        p["id"]
+        for row in result["rows"]
+        for p in row["papers"]
+    }
+
+
+def test_refresh_changes_multiple_rows(db):
+    uid = _test_user_id(db)
+    for i in range(24):
+        topic = "machine-learning" if i % 2 == 0 else "deep-learning"
+        _add_paper(db, f"Row Mix {i}", citations=120 - i, topic=topic, external_id=f"mix-{i}")
+
+    first = build_feed(db, user_id=uid, refresh=False)
+    second = build_feed(db, user_id=uid, refresh=True, client_seen_ids=_feed_paper_ids(first))
+    first_ids = _feed_paper_ids(first)
+    second_ids = _feed_paper_ids(second)
+    assert first_ids
+    assert second_ids
+    assert first_ids != second_ids
+
+
+def test_client_seen_ids_reduce_repeats(db):
+    uid = _test_user_id(db)
+    papers = [
+        _add_paper(db, f"Seen Test {i}", citations=90 - i, external_id=f"seen-{i}")
+        for i in range(10)
+    ]
+    seen = {papers[0].id, papers[1].id, papers[2].id}
+    result = build_feed(db, user_id=uid, client_seen_ids=seen)
+    shown = _feed_paper_ids(result)
+    assert seen.isdisjoint(shown)
+
+
 def test_interest_profile_from_clicks(db):
     uid = _test_user_id(db)
     ml = _add_paper(db, "ML Alpha", citations=50, topic="machine-learning", external_id="int-ml")

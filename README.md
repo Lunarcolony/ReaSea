@@ -173,3 +173,6 @@ pytest tests/ -v
 ├── taxonomy/         OpenAlex → topic mapping
 └── tests/
 ```
+Credits
+Cursor ai was used to create this read me file and setup up the container to host it
+openalex and acxiv api where used to crawl and get reserach papers

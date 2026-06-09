@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { PaperCard } from "@/components/PaperCard";
 import type { Paper } from "@/lib/api";
+import { applySavedState, getSavedPaperIds, toggleSavedPaper } from "@/lib/savedPapers";
 
 export default function SearchPage() {
   const [query, setQuery] = useState("");
@@ -20,7 +21,7 @@ export default function SearchPage() {
     setLoading(true);
     try {
       const data = await api.search(q);
-      setPapers(data.papers || []);
+      setPapers(applySavedState(data.papers || []));
       setSearched(true);
     } finally {
       setLoading(false);
@@ -62,7 +63,21 @@ export default function SearchPage() {
       )}
       <div className="search-results">
         {papers.map((p) => (
-          <PaperCard key={p.id} paper={p} variant="grid" />
+          <PaperCard
+            key={p.id}
+            paper={p}
+            variant="grid"
+            onSave={(id) => {
+              const paper = papers.find((item) => item.id === id);
+              if (!paper) return;
+              toggleSavedPaper(paper);
+              setPapers((prev) =>
+                prev.map((item) =>
+                  item.id === id ? { ...item, saved: getSavedPaperIds().includes(id) } : item
+                )
+              );
+            }}
+          />
         ))}
       </div>
     </div>

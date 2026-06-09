@@ -1,8 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { api, FeedRow } from "@/lib/api";
+import { api, FeedRow, Paper } from "@/lib/api";
 import { getSeenPaperIds, recordShownPaperIds, clearSeenPaperIds } from "@/lib/seenPapers";
+import { applySavedState, toggleSavedPaper } from "@/lib/savedPapers";
 import { FeedRowSection } from "@/components/FeedRow";
 import { FeedYouTubeView } from "@/components/FeedYouTubeView";
 import { FeedControls } from "@/components/FeedControls";
@@ -31,7 +32,12 @@ export default function HomePage() {
     try {
       const seenIds = getSeenPaperIds();
       const data = await api.getFeed(refresh, seenIds);
-      setRows(data.rows || []);
+      const nextRows =
+        data.rows?.map((row: FeedRow) => ({
+          ...row,
+          papers: applySavedState(row.papers),
+        })) || [];
+      setRows(nextRows);
       setPersonalized(Boolean(data.personalized));
       const shown =
         data.shown_ids ||
@@ -54,15 +60,20 @@ export default function HomePage() {
     rows.find((r) => r.id === "because_you_read")?.papers?.[0] ||
     rows.find((r) => r.id === "trending")?.papers?.[0];
 
-  const handleSave = useCallback(async (id: number) => {
-    await api.savePaper(id);
-    api.recordEvent(id, "save").catch(() => {});
-    setRows((prev) =>
-      prev.map((row) => ({
+  const handleSave = useCallback((id: number) => {
+    setRows((prev) => {
+      let toggled = false;
+      const next = prev.map((row) => ({
         ...row,
-        papers: row.papers.map((p) => (p.id === id ? { ...p, saved: true } : p)),
-      }))
-    );
+        papers: row.papers.map((p) => {
+          if (p.id !== id || toggled) return p;
+          toggled = true;
+          const saved = toggleSavedPaper(p as Paper);
+          return { ...p, saved };
+        }),
+      }));
+      return next;
+    });
   }, []);
 
   const handlePaperClick = useCallback((id: number) => {

@@ -1,12 +1,10 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
-from sqlalchemy import desc
 
 from database import get_db
-from models import User, UserPreference, UserEvent, SavedPaper, Paper
+from models import User, UserPreference, UserEvent, Paper
 from api.schemas import PreferencesUpdate, EventsBatch
 from api.single_user import get_default_user
-from recommender.feed import paper_to_dict, get_metrics_map
 from embeddings.pipeline import get_paper_embedding
 
 router = APIRouter()
@@ -54,12 +52,7 @@ def record_events(body: EventsBatch, user: User = Depends(get_default_user), db:
         if not paper:
             continue
 
-        if item.event_type == "save":
-            exists = db.query(SavedPaper).filter(
-                SavedPaper.user_id == user.id, SavedPaper.paper_id == item.paper_id
-            ).first()
-            if not exists:
-                db.add(SavedPaper(user_id=user.id, paper_id=item.paper_id))
+        # Library saves are per-browser (localStorage); do not persist saves server-side.
 
         if item.event_type in ("save", "click", "view"):
             emb = get_paper_embedding(paper)
@@ -84,37 +77,16 @@ def record_events(body: EventsBatch, user: User = Depends(get_default_user), db:
 
 
 @router.get("/me/reading-list")
-def reading_list(user: User = Depends(get_default_user), db: Session = Depends(get_db)):
-    saved = db.query(SavedPaper).filter(SavedPaper.user_id == user.id).order_by(desc(SavedPaper.created_at)).all()
-    paper_ids = [s.paper_id for s in saved]
-    papers = db.query(Paper).filter(Paper.id.in_(paper_ids)).all() if paper_ids else []
-    paper_map = {p.id: p for p in papers}
-    metrics_map = get_metrics_map(db, paper_ids)
-    return {
-        "papers": [
-            paper_to_dict(paper_map[pid], metrics_map.get(pid))
-            for pid in paper_ids if pid in paper_map
-        ]
-    }
+def reading_list():
+    # Library is stored per-browser in localStorage; never return shared server saves.
+    return {"papers": []}
 
 
 @router.post("/me/reading-list/{paper_id}")
-def save_paper(paper_id: int, user: User = Depends(get_default_user), db: Session = Depends(get_db)):
-    paper = db.query(Paper).filter(Paper.id == paper_id).first()
-    if not paper:
-        raise HTTPException(status_code=404, detail="Paper not found")
-    exists = db.query(SavedPaper).filter(SavedPaper.user_id == user.id, SavedPaper.paper_id == paper_id).first()
-    if not exists:
-        db.add(SavedPaper(user_id=user.id, paper_id=paper_id))
-        db.add(UserEvent(user_id=user.id, paper_id=paper_id, event_type="save"))
-        db.commit()
-    return {"saved": True}
+def save_paper(paper_id: int):
+    return {"saved": True, "client_only": True}
 
 
 @router.delete("/me/reading-list/{paper_id}")
-def unsave_paper(paper_id: int, user: User = Depends(get_default_user), db: Session = Depends(get_db)):
-    saved = db.query(SavedPaper).filter(SavedPaper.user_id == user.id, SavedPaper.paper_id == paper_id).first()
-    if saved:
-        db.delete(saved)
-        db.commit()
-    return {"saved": False}
+def unsave_paper(paper_id: int):
+    return {"saved": False, "client_only": True}

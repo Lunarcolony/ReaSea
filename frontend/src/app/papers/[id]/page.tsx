@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import { api, Paper } from "@/lib/api";
+import { isPaperSaved, toggleSavedPaper } from "@/lib/savedPapers";
 import { PaperCard } from "@/components/PaperCard";
 import { paperAbstract, formatAuthors, formatDate, formatCitations } from "@/lib/format";
 
@@ -14,15 +15,17 @@ export default function PaperDetailPage() {
 
   useEffect(() => {
     if (!id) return;
-    api.getPaper(id).then(setPaper).finally(() => setLoading(false));
+    api
+      .getPaper(id)
+      .then((data) => setPaper({ ...data, saved: isPaperSaved(data.id) }))
+      .finally(() => setLoading(false));
     api.recordEvent(id, "view").catch(() => {});
   }, [id]);
 
   const handleSave = async () => {
     if (!paper) return;
-    if (paper.saved) await api.unsavePaper(paper.id);
-    else await api.savePaper(paper.id);
-    setPaper({ ...paper, saved: !paper.saved });
+    const saved = toggleSavedPaper(paper);
+    setPaper({ ...paper, saved });
   };
 
   if (loading) return <div className="loading">Loading paper...</div>;

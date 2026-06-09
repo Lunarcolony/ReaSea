@@ -32,7 +32,11 @@ def test_single_user_preferences(client):
     assert "topic_slugs" in r.json()
 
 
-def test_save_paper_no_auth(client):
+def test_reading_list_is_client_only(client):
+    r = client.get("/users/me/reading-list")
+    assert r.status_code == 200
+    assert r.json()["papers"] == []
+
     search = client.get("/search?q=learning")
     papers = search.json().get("papers", [])
     if not papers:
@@ -41,3 +45,4 @@ def test_save_paper_no_auth(client):
     r = client.post(f"/users/me/reading-list/{paper_id}")
     assert r.status_code == 200
     assert r.json()["saved"] is True
+    assert client.get("/users/me/reading-list").json()["papers"] == []

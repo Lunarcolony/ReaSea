@@ -1,6 +1,7 @@
-const API_URL =
+const API_URL = (
   process.env.NEXT_PUBLIC_API_URL ||
-  (typeof window !== "undefined" ? "/api" : "http://localhost:8000");
+  (typeof window !== "undefined" ? "/api" : "http://localhost:8000")
+).trim();
 
 export interface Paper {
   id: number;
@@ -71,11 +72,6 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify({ topic_slugs, research_role }),
     }),
-  savePaper: (paperId: number) =>
-    apiFetch(`/users/me/reading-list/${paperId}`, { method: "POST" }),
-  unsavePaper: (paperId: number) =>
-    apiFetch(`/users/me/reading-list/${paperId}`, { method: "DELETE" }),
-  readingList: () => apiFetch("/users/me/reading-list"),
   recordEvent: (paper_id: number, event_type: string) =>
     apiFetch("/users/me/events", {
       method: "POST",

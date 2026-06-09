@@ -64,7 +64,7 @@ foreach ($port in @(8000, 3000)) {
 $backendTitle = "Research Feed API"
 $frontendTitle = "Research Feed UI"
 $backendCmd = "title $backendTitle && cd /d `"$Root`" && .venv\Scripts\python -m uvicorn api.main:app --reload --host 127.0.0.1 --port 8000"
-$frontendCmd = "title $frontendTitle && cd /d `"$Root\frontend`" && npm run dev -- -p 3000"
+$frontendCmd = "title $frontendTitle && cd /d `"$Root\frontend`" && set NEXT_PUBLIC_API_URL=http://127.0.0.1:8000 && npm run dev -- -p 3000"
 
 Write-Host "Starting backend on http://127.0.0.1:8000 ..."
 Start-Process cmd.exe -ArgumentList "/k", $backendCmd

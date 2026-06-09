@@ -1,12 +1,12 @@
 {
-  "OpenAlexCrawler|Machine Learning|machine learning": 50,
-  "ArxivCrawler|Computer Vision|computer vision": 40,
-  "OpenAlexCrawler|Computer Vision|computer vision": 50,
-  "ArxivCrawler|Deep Learning|deep learning": 20,
-  "OpenAlexCrawler|Artificial Intelligence|artificial intelligence": 40,
-  "OpenAlexCrawler|Bioinformatics|bioinformatics": 20,
-  "ArxivCrawler|Artificial Intelligence|artificial intelligence": 80,
-  "ArxivCrawler|Bioinformatics|bioinformatics": 40,
-  "OpenAlexCrawler|Deep Learning|deep learning": 50,
-  "ArxivCrawler|Machine Learning|machine learning": 30
+  "OpenAlexCrawler|Machine Learning|machine learning": 90,
+  "ArxivCrawler|Computer Vision|computer vision": 160,
+  "OpenAlexCrawler|Computer Vision|computer vision": 160,
+  "ArxivCrawler|Deep Learning|deep learning": 140,
+  "OpenAlexCrawler|Artificial Intelligence|artificial intelligence": 100,
+  "OpenAlexCrawler|Bioinformatics|bioinformatics": 90,
+  "ArxivCrawler|Artificial Intelligence|artificial intelligence": 170,
+  "ArxivCrawler|Bioinformatics|bioinformatics": 190,
+  "OpenAlexCrawler|Deep Learning|deep learning": 170,
+  "ArxivCrawler|Machine Learning|machine learning": 80
 }

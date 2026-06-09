@@ -1,0 +1,56 @@
+# Demo deployment: API + Next.js + SQLite (no Postgres required).
+# Set PUBLIC_URL and NEXT_PUBLIC_API_URL before `docker compose up`.
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: sqlite:////app/data/papers.db
+      SECRET_KEY: ${SECRET_KEY:-demo-research-feed-secret}
+      CORS_ORIGINS: ${CORS_ORIGINS:-*}
+    volumes:
+      - ./data:/app/data
+    expose:
+      - "8000"
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+    restart: unless-stopped
+    environment:
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+    expose:
+      - "3000"
+    depends_on:
+      - api
+
+  nginx:
+    image: nginx:alpine
+    restart: unless-stopped
+    ports:
+      - "${HTTP_PORT:-8080}:80"
+    volumes:
+      - ./deploy/nginx.demo.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - api
+      - frontend
+
+  crawler:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    restart: unless-stopped
+    command: python pipeline/cooperative.py
+    environment:
+      DATABASE_URL: sqlite:////app/data/papers.db
+      PIPELINE_SLEEP_SECONDS: "600"
+    volumes:
+      - ./data:/app/data
+    depends_on:
+      - api

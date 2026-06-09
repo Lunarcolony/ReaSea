@@ -1,0 +1,14 @@
+[Unit]
+Description=Research Feed Frontend
+After=network.target research-feed-api.service
+
+[Service]
+Type=simple
+WorkingDirectory=/root/research-feed/frontend
+Environment=NEXT_PUBLIC_API_URL=/api
+ExecStart=/usr/bin/npm start -- -p 3000 -H 127.0.0.1
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

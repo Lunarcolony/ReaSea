@@ -1,0 +1,16 @@
+[Unit]
+Description=Research Feed API
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/root/research-feed
+Environment=DATABASE_URL=sqlite:////root/research-feed/data/papers.db
+Environment=CORS_ORIGINS=https://jithesh.hackclub.app
+Environment=SECRET_KEY=demo-research-feed-secret
+ExecStart=/root/research-feed/.venv/bin/uvicorn api.main:app --host 127.0.0.1 --port 8000
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
